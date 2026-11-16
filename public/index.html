@@ -8,7 +8,10 @@
 </head>
 <body>
 <header class="top">
-  <div class="logo">OHMY <b>MATE</b></div>
+  <a class="brand" href="#" aria-label="OHMYHOTEL MATE">
+    <span class="logochip"><img src="/img/omh-logo.jpeg" alt="OHMYHOTEL"></span>
+    <span class="mate">MATE</span>
+  </a>
   <div class="tools">
     <select id="lang" aria-label="language">
       <option value="ko">한국어</option>
@@ -17,24 +20,29 @@
       <option value="zh" disabled>简体中文 (준비 중)</option>
       <option value="vi" disabled>Tiếng Việt (준비 중)</option>
     </select>
-    <button id="staffBtn" class="ghost"></button>
-    <button id="newBtn" class="primary"></button>
+    <button id="staffBtn" class="ghost" type="button"></button>
+    <button id="newBtn" class="ghost strong" type="button"></button>
   </div>
 </header>
 <div id="demoBar" class="demo"></div>
 <div id="staffBar" class="staffbar" hidden></div>
 <main>
+  <section id="hero" class="hero">
+    <h1 id="heroTitle"></h1>
+    <p id="heroSub"></p>
+    <div id="chips" class="chips"></div>
+  </section>
   <section id="chat" aria-live="polite"></section>
-  <section id="chips" class="chips"></section>
 </main>
 <footer class="composer">
+  <div id="quick" class="quick" hidden></div>
   <form id="form">
     <input id="msg" type="text" autocomplete="off" maxlength="500">
     <button class="primary" id="sendBtn" type="submit"></button>
   </form>
   <div class="row">
-    <button id="shareBtn" class="ghost"></button>
-    <button id="compareBtn" class="ghost"></button>
+    <button id="shareBtn" class="ghost" type="button"></button>
+    <button id="compareBtn" class="ghost" type="button"></button>
   </div>
   <p class="foot" id="foot"></p>
 </footer>
@@ -42,8 +50,16 @@
   <h2 id="shareTitle"></h2>
   <p id="shareNote"></p>
   <input id="shareUrl" readonly>
-  <div class="row"><button id="copyBtn" class="primary"></button><button id="printBtn" class="ghost"></button><button id="closeShare" class="ghost"></button></div>
+  <div class="row"><button id="copyBtn" class="primary" type="button"></button><button id="printBtn" class="ghost" type="button"></button><button id="closeShare" class="ghost" type="button"></button></div>
   <div id="qr"></div>
+</dialog>
+<dialog id="pinDlg">
+  <form method="dialog" id="pinForm">
+    <h2 id="pinTitle"></h2>
+    <input id="pinInput" type="password" inputmode="numeric" autocomplete="off" maxlength="12">
+    <p id="pinErr" class="pinerr" hidden></p>
+    <div class="row"><button id="pinOk" class="primary" value="ok" type="submit"></button><button id="pinCancel" class="ghost" value="cancel" type="button"></button></div>
+  </form>
 </dialog>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="/app.js"></script>

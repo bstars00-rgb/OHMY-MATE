@@ -18,6 +18,7 @@ const shares = new Map();
 const clicks = new Map(); // clickId -> {sessionAnon, hotelId, at}
 const stats = { sessions: 0, messages: 0, searches: 0, noResult: 0, errors: 0, blocked: 0, clicks: 0, shares: 0, types: {}, byCountry: {}, respMsTotal: 0 };
 const rate = new Map();
+const reports = []; // 직원 오류 신고(메모리). 운영에서는 티켓 시스템으로 보낸다.
 
 fs.mkdirSync(config.logDir, { recursive: true });
 function audit(event, data) {
@@ -95,7 +96,7 @@ function readBody(req) {
   });
 }
 
-const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml' };
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.jpeg': 'image/jpeg', '.jpg': 'image/jpeg', '.png': 'image/png' };
 function serveStatic(req, res, urlPath) {
   const rel = urlPath === '/' ? 'index.html' : urlPath.replace(/^\/+/, '');
   const file = path.normalize(path.join(PUBLIC, rel));
@@ -186,8 +187,15 @@ async function route(req, res) {
   if (req.method === 'POST' && p === '/api/report') {
     if (!can(role, 'report')) return send(res, 403, { error: 'forbidden' });
     const kind = ['mapping', 'inventory', 'price', 'other'].includes(body.kind) ? body.kind : 'other';
-    audit('issue_report', { role, kind, hotelId: String(body.hotelId || '').slice(0, 20), note: guard.maskPII(String(body.note || '').slice(0, 300)).text });
+    const rep = { t: new Date().toISOString(), role, kind, hotelId: String(body.hotelId || '').slice(0, 20), note: guard.maskPII(String(body.note || '').slice(0, 300)).text };
+    reports.push(rep);
+    if (reports.length > 200) reports.shift();
+    audit('issue_report', rep);
     return send(res, 200, { ok: true });
+  }
+  if (req.method === 'GET' && p === '/api/admin/reports') {
+    if (!can(role, 'stats')) return send(res, 403, { error: 'forbidden' });
+    return send(res, 200, { reports: reports.slice(-50).reverse() });
   }
   if (req.method === 'GET' && p === '/api/staff/check') return send(res, can(role, 'staff-view') ? 200 : 401, { role });
   if (req.method === 'GET' && p === '/api/admin/stats') {
@@ -195,6 +203,7 @@ async function route(req, res) {
     const m = stats.messages || 1;
     return send(res, 200, {
       ...stats,
+      reports: reports.length,
       avgResponseMs: Math.round(stats.respMsTotal / m),
       aiHandledRate: stats.messages ? 1 - stats.blocked / stats.messages : null,
       searchToClickRate: stats.searches ? stats.clicks / stats.searches : null,

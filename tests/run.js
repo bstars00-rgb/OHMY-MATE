@@ -63,6 +63,10 @@ test('intent', '샘플 시나리오 슬롯 추출', async () => {
   const { last } = await say(SAMPLE);
   eq(last.slots, { city: 'osaka', station: 'namba', checkIn: '2026-11-25', checkOut: '2026-11-27', adults: 2, budgetNight: 12000, nights: 2 });
 });
+test('intent', '샘플 질문의 "여행" 단어로 일반 안내문이 붙지 않음', async () => {
+  const { last } = await say(SAMPLE);
+  ok(!last.reply.includes('어떤 지역과 시기'));
+});
 test('intent', '교토 당일치기는 일반 여행정보(A)로 분류', async () => {
   const { last } = await say('교토에 당일치기로 다녀올 수 있나요?');
   ok(last.types.includes('A'));
@@ -486,6 +490,67 @@ test('ui', '화면 구성: DEMO 표시줄·5개 언어·viewport·innerHTML 미�
   ok(!js.includes('innerHTML'));
   ok(!/OMM_STAFF|1111|2222/.test(js + html));
 });
+test('http', '로고 이미지를 image/jpeg 로 제공', async () => {
+  const r = await new Promise((resolve, reject) => {
+    http.get({ host: '127.0.0.1', port, path: '/img/omh-logo.jpeg' }, (res) => { res.resume(); res.on('end', () => resolve(res)); }).on('error', reject);
+  });
+  eq([r.statusCode, r.headers['content-type']], [200, 'image/jpeg']);
+});
+test('http', '신고 내역 조회는 manager 이상만', async () => {
+  await req(port, 'POST', '/api/report', { kind: 'price', hotelId: 'D001', note: '확인 필요' }, { 'x-staff-pin': '1111' });
+  eq((await req(port, 'GET', '/api/admin/reports', null, { 'x-staff-pin': '1111' })).status, 403);
+  const r = await req(port, 'GET', '/api/admin/reports', null, { 'x-staff-pin': '2222' });
+  eq(r.status, 200);
+  ok(r.json.reports.length >= 1 && r.json.reports[0].kind === 'price');
+});
+test('security', '직원 PIN 기본값: demo 모드에서만 0000, live 모드는 꺼짐, 환경변수가 우선', async () => {
+  const { execFileSync } = require('child_process');
+  const run = (env) => JSON.parse(execFileSync(process.execPath, ['-e', "console.log(JSON.stringify(require('./lib/config').staffPins))"], { cwd: path.join(__dirname, '..'), env: { ...process.env, OMM_STAFF_PINS: '', OMM_DATA_MODE: '', ...env } }).toString());
+  eq(run({}), { manager: '0000' });
+  eq(run({ OMM_DATA_MODE: 'live' }), {});
+  eq(run({ OMM_STAFF_PINS: 'agent:9999' }), { agent: '9999' });
+}, true);
+test('ui', '화면에 오마이호텔 CI 로고 사용, 직원 PIN 은 화면 소스에 없음', async () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+  const js = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
+  ok(html.includes('src="/img/omh-logo.jpeg"') && html.includes('alt="OHMYHOTEL"'));
+  ok(!js.includes('0000') && !html.includes('0000'));
+});
+test('standalone', '단일 HTML: 외부 의존 없음, 로고 내장', async () => {
+  require('child_process').execFileSync(process.execPath, [path.join(__dirname, '..', 'scripts', 'build-standalone.js')]);
+  const html = fs.readFileSync(path.join(__dirname, '..', 'dist', 'OHMY-MATE-demo.html'), 'utf8');
+  ok(html.includes('data:image/jpeg;base64,'));
+  ok(!/<script src=|<link [^>]*href=/.test(html), 'no external scripts/styles');
+});
+test('standalone', '단일 HTML 직원 모드: PIN 0000 만 통과, 직원 정보·통계·신고', async () => {
+  const vm = require('vm');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'dist', 'OHMY-MATE-demo.html'), 'utf8');
+  const code = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)][0][1];
+  const win = { fetch: async () => { throw new Error('no network'); } };
+  vm.runInContext(code, vm.createContext({ window: win, Response, Blob, URL, console }));
+  const call = async (p, body, pin) => {
+    const r = await win.fetch(p, { method: body ? 'POST' : 'GET', headers: pin ? { 'x-staff-pin': pin } : {}, body: body ? JSON.stringify(body) : undefined });
+    return { status: r.status, json: await r.json() };
+  };
+  eq((await call('/api/staff/check', null, '1234')).status, 401);
+  eq((await call('/api/staff/check')).status, 401);
+  eq((await call('/api/staff/check', null, '0000')).json.role, 'manager');
+  const plain = await call('/api/chat', { message: SAMPLE, staffView: true });
+  ok(plain.json.cards.length > 0 && plain.json.cards.every((c) => !c.staff), 'PIN 없이는 직원 정보 없음');
+  const staff = await call('/api/chat', { message: SAMPLE, staffView: true }, '0000');
+  ok(staff.json.cards.every((c) => c.staff && c.staff.breakdown && c.staff.hotelCode));
+  ok(staff.json.staff && staff.json.staff.excluded.unmapped === 1);
+  ok(!/_cost|_margin|_supplier|SUP-[XYZ]/.test(JSON.stringify(staff.json)));
+  eq((await call('/api/admin/stats')).status, 403);
+  const st = await call('/api/admin/stats', null, '0000');
+  ok(st.status === 200 && st.json.messages >= 2 && st.json.searches >= 2);
+  eq((await call('/api/report', { kind: 'mapping', hotelId: 'D009' })).status, 403);
+  eq((await call('/api/report', { kind: 'mapping', hotelId: 'D009' }, '0000')).status, 200);
+  const rp = await call('/api/admin/reports', null, '0000');
+  ok(rp.json.reports.length === 1 && rp.json.reports[0].kind === 'mapping');
+  const sh = await call('/api/share', { sessionId: staff.json.sessionId }, '0000');
+  ok(sh.status === 200 && sh.json.url);
+}, true);
 test('http', '호출 폭주 시 429 (마지막에 실행)', async () => {
   let got = 0;
   for (let i = 0; i < 70; i += 1) if ((await req(port, 'GET', '/api/admin/stats')).status === 429) got += 1;

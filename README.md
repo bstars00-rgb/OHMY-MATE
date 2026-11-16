@@ -13,8 +13,14 @@ node scripts/build-standalone.js    # dist/OHMY-MATE-demo.html (서버 없이 �
 `main`에 push하면 GitHub Actions가 테스트를 돌리고 단일 HTML 데모를 GitHub Pages에 배포합니다.
 단일 HTML 데모에는 직원 모드와 QR이 없고, 공유는 결과 페이지를 HTML 파일로 저장하는 방식입니다.
 
+## 직원 모드
+
+- 화면 위쪽 "직원 모드" 버튼 → PIN 입력. DEMO 데이터 모드의 기본 PIN은 **0000**(manager 권한)이며, 단일 HTML 데모에서도 같습니다.
+- 켜면 호텔 코드·B2C ID·점수 근거·제외 사유, 통계, 오류 신고와 신고 내역이 보입니다. 원가·마진·공급사 정보는 직원 모드에서도 나오지 않습니다.
+- 기본 PIN은 가상 데이터만 있는 시연용입니다. 실데이터(live) 모드에서는 기본 PIN이 없고 직원 모드가 꺼져 있으며, `OMM_STAFF_PINS`로 직접 지정해야 합니다.
+
 ## 설정(서버 모드)
 
-- 직원 모드: `OMM_STAFF_PINS=agent:1234,manager:5678 node server.js`
+- 직원 PIN 지정: `OMM_STAFF_PINS=agent:1234,manager:5678 node server.js` (지정하면 기본 PIN 0000은 꺼집니다)
 - B2C 링크: 규격이 확정되면 `OMM_B2C_URL_TEMPLATE`, `OMM_B2C_ALLOWED_HOSTS`로 설정합니다. 비어 있으면 링크를 만들지 않습니다.
 - 실데이터 연동은 `lib/adapter.js`의 live 구현으로 합니다(고객가 API 준비 후).
