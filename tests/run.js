@@ -5,6 +5,8 @@ const fs = require('fs');
 const http = require('http');
 process.env.OMM_STAFF_PINS = 'agent:1111,manager:2222';
 process.env.OMM_LOG_DIR = path.join(__dirname, '.logs');
+process.env.OMM_DATA_DIR = path.join(__dirname, '.data');
+fs.rmSync(process.env.OMM_DATA_DIR, { recursive: true, force: true });
 process.env.OMM_DATA_MODE = 'demo';
 
 const engine = require('../lib/engine');
@@ -551,9 +553,116 @@ test('standalone', '단일 HTML 직원 모드: PIN 0000 만 통과, 직원 정�
   const sh = await call('/api/share', { sessionId: staff.json.sessionId }, '0000');
   ok(sh.status === 200 && sh.json.url);
 }, true);
+// ---------------- 상담 결과 저장·전달 ----------------
+const SAVE_TEXT = '010-1234-5678 번호로 연락 주세요. ' + SAMPLE;
+async function chatSession() {
+  const c = await req(port, 'POST', '/api/chat', { message: SAVE_TEXT });
+  return c.json.sessionId;
+}
+test('storage', '동의 없이는 저장되지 않음 (미체크·문자열 "yes" 모두 거부)', async () => {
+  const sid = await chatSession();
+  eq((await req(port, 'POST', '/api/consult/save', { sessionId: sid })).status, 400);
+  eq((await req(port, 'POST', '/api/consult/save', { sessionId: sid, consent: false })).status, 400);
+  eq((await req(port, 'POST', '/api/consult/save', { sessionId: sid, consent: 'yes' })).status, 400);
+}, true);
+test('storage', '저장할 추천 결과가 없으면 저장 거부', async () => {
+  const c = await req(port, 'POST', '/api/chat', { message: '교토에 당일치기로 다녀올 수 있나요?' });
+  eq((await req(port, 'POST', '/api/consult/save', { sessionId: c.json.sessionId, consent: true })).status, 400);
+});
+test('storage', '동의 후 저장: 30일 만료·동의 기록, 질문 원문·전화번호는 저장되지 않음', async () => {
+  const sid = await chatSession();
+  const r = await req(port, 'POST', '/api/consult/save', { sessionId: sid, consent: true });
+  eq(r.status, 200);
+  const disk = fs.readFileSync(path.join(process.env.OMM_DATA_DIR, 'consults.json'), 'utf8');
+  const rec = JSON.parse(disk).find((x) => x.id === r.json.id);
+  ok(rec.consent.given === true && rec.consent.version === require('../lib/consent').VERSION);
+  eq(Math.round((rec.expiresAt - rec.createdAt) / 86400000), 30);
+  ok(!disk.includes('5678') && !disk.includes('어머니와 둘이') && !/_cost|_margin|SUP-[XYZ]/.test(disk), 'no raw text/PII/internal fields on disk');
+  ok(rec.snap.cards.length > 0 && rec.snap.slots.city === 'osaka');
+}, true);
+test('storage', '저장된 링크는 열리고 삭제 버튼을 가짐, 저장 안 한 임시 링크는 삭제 버튼 없음', async () => {
+  const sid = await chatSession();
+  const saved = await req(port, 'POST', '/api/consult/save', { sessionId: sid, consent: true });
+  const page = await req(port, 'GET', '/s/' + saved.json.token);
+  eq(page.status, 200);
+  ok(page.text.includes('id="del"') && page.text.includes('[DEMO]') && !page.text.includes('5678'));
+  const temp = await req(port, 'POST', '/api/share', { sessionId: sid });
+  const tpage = await req(port, 'GET', new URL(temp.json.url).pathname);
+  ok(!tpage.text.includes('id="del"'));
+});
+test('storage', '고객은 자기 토큰으로 삭제 가능, 삭제 뒤 링크는 404', async () => {
+  const sid = await chatSession();
+  const s = await req(port, 'POST', '/api/consult/save', { sessionId: sid, consent: true });
+  eq((await req(port, 'POST', '/api/consult/delete', { token: s.json.token })).status, 200);
+  eq((await req(port, 'GET', '/s/' + s.json.token)).status, 404);
+  eq((await req(port, 'POST', '/api/consult/delete', { token: s.json.token })).status, 404);
+  eq((await req(port, 'POST', '/api/consult/delete', { token: 'x' })).status, 404);
+}, true);
+test('storage', '직원 이력: 고객 403, agent 조회, 삭제는 manager 이상', async () => {
+  const sid = await chatSession();
+  const s = await req(port, 'POST', '/api/consult/save', { sessionId: sid, consent: true });
+  eq((await req(port, 'GET', '/api/consults')).status, 403);
+  const list = await req(port, 'GET', '/api/consults', null, { 'x-staff-pin': '1111' });
+  eq(list.status, 200);
+  const row = list.json.consults.find((x) => x.id === s.json.id);
+  ok(row && row.hotels.length > 0 && row.summary.includes('난바역'));
+  ok(!JSON.stringify(list.json).includes('5678'));
+  eq((await req(port, 'POST', '/api/consults/delete', { id: s.json.id }, { 'x-staff-pin': '1111' })).status, 403);
+  eq((await req(port, 'POST', '/api/consults/delete', { id: s.json.id }, { 'x-staff-pin': '2222' })).status, 200);
+  eq((await req(port, 'GET', '/s/' + s.json.token)).status, 404);
+}, true);
+test('storage', '보관 기간(31일 경과) 지나면 자동 삭제되고 파일에도 남지 않음', async () => {
+  const { createStore } = require('../lib/store');
+  const dir = path.join(process.env.OMM_DATA_DIR, 'unit-purge');
+  let now = 1000000;
+  const st = createStore({ dir, retentionDays: 30, now: () => now });
+  const rec = st.create({ snap: { lang: 'ko', slots: {}, cards: [] }, consent: { given: true }, createdBy: 'customer' });
+  ok(st.getByToken(rec.token));
+  now += 29 * 86400000;
+  ok(st.getByToken(rec.token), '29일째에는 남아 있음');
+  now += 2 * 86400000;
+  eq(st.getByToken(rec.token), null);
+  eq(st.list().length, 0);
+  eq(JSON.parse(fs.readFileSync(path.join(dir, 'consults.json'), 'utf8')), []);
+}, true);
+test('storage', '서버를 다시 켜도 저장된 기록이 유지됨(파일 저장)', async () => {
+  const { createStore } = require('../lib/store');
+  const dir = path.join(process.env.OMM_DATA_DIR, 'unit-persist');
+  const a = createStore({ dir, retentionDays: 30 });
+  const rec = a.create({ snap: { lang: 'ko', slots: {}, cards: [] }, consent: { given: true }, createdBy: 'staff' });
+  const b = createStore({ dir, retentionDays: 30 });
+  eq(b.getByToken(rec.token).id, rec.id);
+});
+test('delivery', '전달 이벤트: 허용 채널만 기록, 모르는 토큰·채널은 거부', async () => {
+  const sid = await chatSession();
+  const s = await req(port, 'POST', '/api/consult/save', { sessionId: sid, consent: true });
+  eq((await req(port, 'POST', '/api/consult/event', { token: s.json.token, channel: 'webshare' })).status, 200);
+  eq((await req(port, 'POST', '/api/consult/event', { token: s.json.token, channel: 'sms' })).status, 404);
+  eq((await req(port, 'POST', '/api/consult/event', { token: 'nope', channel: 'webshare' })).status, 404);
+  const list = await req(port, 'GET', '/api/consults', null, { 'x-staff-pin': '1111' });
+  eq(list.json.consults.find((x) => x.id === s.json.id).deliveries.map((d) => d.channel), ['webshare']);
+});
+test('delivery', '채널 목록: 고객 기기 방식은 사용 가능, 알림톡·LINE·WhatsApp 등 서버 발송은 미연결', async () => {
+  const r = await req(port, 'GET', '/api/channels');
+  const by = Object.fromEntries(r.json.channels.map((c) => [c.id, c]));
+  ok(by.webshare.ready && by.qr.ready && !by.webshare.personalData);
+  ok(['kakao-alimtalk', 'kakao-brand', 'email-server', 'line', 'whatsapp', 'kakao-share'].every((id) => by[id] && by[id].ready === false));
+  ok(by['kakao-alimtalk'].personalData === true && by['kakao-alimtalk'].requires.some((x) => x.includes('템플릿 심사')));
+});
+test('delivery', '동의 문구: 보관 일수·삭제 권리·마케팅 아님을 명시', async () => {
+  const r = await req(port, 'GET', '/api/consent?lang=ko');
+  ok(r.json.text.includes('30일') && r.json.text.includes('삭제') && r.json.text.includes('마케팅 수신 동의가 아닙니다') && r.json.version);
+  const e = await req(port, 'GET', '/api/consent?lang=en');
+  ok(/30 days/.test(e.json.text) && /not marketing consent/.test(e.json.text));
+});
+test('ui', '동의 체크박스는 기본 해제, 저장 버튼은 비활성으로 시작', async () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+  ok(/<input type="checkbox" id="consentChk">/.test(html), 'unchecked by default');
+  ok(/id="saveBtn"[^>]*disabled/.test(html));
+});
 test('http', '호출 폭주 시 429 (마지막에 실행)', async () => {
   let got = 0;
-  for (let i = 0; i < 70; i += 1) if ((await req(port, 'GET', '/api/admin/stats')).status === 429) got += 1;
+  for (let i = 0; i < 320; i += 1) if ((await req(port, 'GET', '/api/admin/stats')).status === 429) got += 1;
   ok(got > 0);
 });
 

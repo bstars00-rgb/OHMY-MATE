@@ -50,8 +50,20 @@
   <h2 id="shareTitle"></h2>
   <p id="shareNote"></p>
   <input id="shareUrl" readonly>
-  <div class="row"><button id="copyBtn" class="primary" type="button"></button><button id="printBtn" class="ghost" type="button"></button><button id="closeShare" class="ghost" type="button"></button></div>
+  <div class="row">
+    <button id="webShareBtn" class="primary" type="button" hidden></button>
+    <button id="copyBtn" class="ghost" type="button"></button>
+    <button id="fileBtn" class="ghost" type="button" hidden></button>
+    <button id="mailBtn" class="ghost" type="button" hidden></button>
+    <button id="printBtn" class="ghost" type="button"></button>
+  </div>
   <div id="qr"></div>
+  <div id="saveBox" class="savebox" hidden>
+    <label class="consent"><input type="checkbox" id="consentChk"><span id="consentText"></span></label>
+    <div class="row"><button id="saveBtn" class="primary" type="button" disabled></button><button id="delBtn" class="ghost danger" type="button" hidden></button></div>
+    <p id="saveMsg" class="small" role="status"></p>
+  </div>
+  <div class="row end"><button id="closeShare" class="ghost" type="button"></button></div>
 </dialog>
 <dialog id="pinDlg">
   <form method="dialog" id="pinForm">

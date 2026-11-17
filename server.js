@@ -10,6 +10,9 @@ const guard = require('./lib/guard');
 const { createAdapter } = require('./lib/adapter');
 const { buildB2CUrl } = require('./lib/b2c');
 const { shareSnapshot, sharePage } = require('./lib/share');
+const { createStore } = require('./lib/store');
+const consent = require('./lib/consent');
+const { listChannels } = require('./lib/delivery');
 
 const PUBLIC = path.join(__dirname, 'public');
 const adapter = createAdapter(config.dataMode);
@@ -19,6 +22,9 @@ const clicks = new Map(); // clickId -> {sessionAnon, hotelId, at}
 const stats = { sessions: 0, messages: 0, searches: 0, noResult: 0, errors: 0, blocked: 0, clicks: 0, shares: 0, types: {}, byCountry: {}, respMsTotal: 0 };
 const rate = new Map();
 const reports = []; // 직원 오류 신고(메모리). 운영에서는 티켓 시스템으로 보낸다.
+// 동의한 고객의 상담 결과만 저장한다. 보관 기간이 지나면 자동 삭제(시작 시와 1시간마다).
+const store = createStore({ dir: config.dataDir, retentionDays: config.retentionDays });
+setInterval(() => store.purge(), 3600000).unref();
 
 fs.mkdirSync(config.logDir, { recursive: true });
 function audit(event, data) {
@@ -59,7 +65,7 @@ function limited(req) {
   const arr = (rate.get(ip) || []).filter((t) => now - t < 60000);
   arr.push(now);
   rate.set(ip, arr);
-  return arr.length > 60;
+  return arr.length > 300;
 }
 
 function send(res, code, body, type = 'application/json; charset=utf-8', extra = {}) {
@@ -114,10 +120,20 @@ async function route(req, res) {
   const p = url.pathname;
   if (req.method === 'GET' && p === '/api/health') return send(res, 200, { ok: true, dataMode: adapter.mode, staffEnabled: Object.keys(config.staffPins).length > 0, b2cLinkConfigured: !!config.b2cUrlTemplate });
   if (req.method === 'GET' && p.startsWith('/s/')) {
-    const sh = shares.get(p.slice(3));
+    const token = p.slice(3);
+    const base = config.publicBaseUrl || `http://${req.headers.host}`;
+    const hdr = { 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'" };
+    const saved = store.getByToken(token);
+    if (saved) return send(res, 200, sharePage(saved.snap, { url: `${base}/s/${token}`, token, saved: true, expiresAt: saved.expiresAt }), 'text/html; charset=utf-8', hdr);
+    const sh = shares.get(token);
     if (!sh || sh.expires < Date.now()) return send(res, 404, '<p>Link expired</p>', 'text/html; charset=utf-8');
-    return send(res, 200, sharePage(sh.snap), 'text/html; charset=utf-8', { 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'" });
+    return send(res, 200, sharePage(sh.snap, { url: `${base}/s/${token}`, token: '', saved: false }), 'text/html; charset=utf-8', hdr);
   }
+  if (req.method === 'GET' && p === '/api/consent') {
+    const L = url.searchParams.get('lang') === 'en' ? 'en' : 'ko';
+    return send(res, 200, { version: consent.VERSION, days: store.retentionDays, text: consent.text(L, store.retentionDays) });
+  }
+  if (req.method === 'GET' && p === '/api/channels') return send(res, 200, { channels: listChannels() });
   if (req.method === 'GET' && p.startsWith('/api/share/')) {
     const sh = shares.get(p.slice(11));
     if (!sh || sh.expires < Date.now()) return send(res, 404, { error: 'expired' });
@@ -183,6 +199,54 @@ async function route(req, res) {
     audit('share', { s: anon(s.id) });
     const base = config.publicBaseUrl || `http://${req.headers.host}`;
     return send(res, 200, { token, url: `${base}/s/${token}`, expiresInHours: config.shareTtlMs / 3600000 });
+  }
+  if (req.method === 'POST' && p === '/api/consult/save') {
+    const s = sessions.get(body.sessionId);
+    if (!s) return send(res, 404, { error: 'no_session' });
+    if (body.consent !== true) return send(res, 400, { error: 'consent_required' });
+    if (!s.lastCards.length) return send(res, 400, { error: 'nothing_to_save' });
+    const rec = store.create({
+      snap: shareSnapshot(s, role, adapter.mode),
+      consent: { given: true, at: Date.now(), version: consent.VERSION, days: store.retentionDays },
+      createdBy: role ? 'staff' : 'customer',
+    });
+    stats.saves = (stats.saves || 0) + 1;
+    audit('consult_save', { s: anon(s.id), id: rec.id, by: rec.createdBy });
+    const base = config.publicBaseUrl || `http://${req.headers.host}`;
+    return send(res, 200, { id: rec.id, token: rec.token, url: `${base}/s/${rec.token}`, expiresAt: rec.expiresAt });
+  }
+  if (req.method === 'POST' && p === '/api/consult/delete') {
+    const ok = store.removeByToken(String(body.token || ''));
+    audit('consult_delete', { by: 'token', ok });
+    return send(res, ok ? 200 : 404, { deleted: ok });
+  }
+  if (req.method === 'POST' && p === '/api/consult/event') {
+    const ok = store.addDelivery(String(body.token || ''), String(body.channel || ''));
+    if (ok) stats.shareEvents = (stats.shareEvents || 0) + 1;
+    return send(res, ok ? 200 : 404, { ok });
+  }
+  if (req.method === 'GET' && p === '/api/consults') {
+    if (!can(role, 'staff-view')) return send(res, 403, { error: 'forbidden' });
+    const base = config.publicBaseUrl || `http://${req.headers.host}`;
+    const list = store.list().map((r) => ({
+      id: r.id,
+      createdAt: r.createdAt,
+      expiresAt: r.expiresAt,
+      createdBy: r.createdBy,
+      lang: r.snap.lang,
+      summary: engine.summarize(r.snap.slots, r.snap.lang),
+      hotels: r.snap.cards.map((c) => c.name),
+      deliveries: r.deliveries,
+      consentVersion: r.consent.version,
+      url: `${base}/s/${r.token}`,
+    }));
+    return send(res, 200, { consults: list });
+  }
+  if (req.method === 'POST' && p === '/api/consults/delete') {
+    if (!can(role, 'stats')) return send(res, 403, { error: 'forbidden' });
+    const ok = store.remove(String(body.id || ''));
+    audit('consult_delete', { by: role, ok, id: String(body.id || '').slice(0, 12) });
+    return send(res, ok ? 200 : 404, { deleted: ok });
   }
   if (req.method === 'POST' && p === '/api/report') {
     if (!can(role, 'report')) return send(res, 403, { error: 'forbidden' });

@@ -113,3 +113,12 @@ dialog h2{margin:0 0 6px;font-size:20px}
 .pinerr{color:#b42318;font-size:14px;margin:0 0 8px}
 @media (max-width:640px){body{font-size:16px;padding-bottom:250px}.top{padding:8px 12px}.logochip img{height:28px}main{padding:8px 12px}.composer{padding:8px 12px}.hero{padding-top:24px}}
 @media print{.top,.composer,.chips,.demo,.staffbar,.actions,.quick{display:none}}
+
+/* 상담 결과 저장·전달 */
+.savebox{border-top:1px solid var(--line);margin-top:12px;padding-top:12px}
+.consent{display:flex;gap:10px;align-items:flex-start;font-size:14px;line-height:1.5;color:var(--mute);cursor:pointer;margin-bottom:10px}
+.consent input{width:22px;height:22px;margin:2px 0 0;flex:none;accent-color:var(--brand)}
+.small{font-size:13px;color:var(--mute);margin:8px 0 0}
+button.danger{color:#b42318;border-color:#e7b4ae}
+.row.end{justify-content:flex-end;margin-top:12px}
+button:disabled{opacity:.5;cursor:not-allowed}

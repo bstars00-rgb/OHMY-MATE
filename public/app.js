@@ -14,6 +14,9 @@
       linkNone: '아직 연결된 B2C 예약 링크가 없습니다. DEMO 데이터라 실제 예약은 할 수 없습니다.', retry: '다시 시도', err: '연결에 실패했습니다. 잠시 뒤 다시 시도해 주세요.',
       foot: '가격과 재고는 조회 시점 기준이며 예약 전에 다시 확인합니다. 개인정보는 입력하지 마세요. 10분간 입력이 없으면 상담이 초기화됩니다.',
       notes: '확인 사항', hello: '안녕하세요, OHMY MATE입니다. 여행 지역, 날짜, 인원, 예산을 편하게 말씀해 주세요.',
+      webShare: '휴대폰으로 보내기 (카톡·LINE 등)', mail: '이메일로 보내기', file: 'HTML 파일 저장', tempNote: '저장하지 않은 임시 링크입니다(24시간 뒤 만료). 저장하려면 아래에 동의해 주세요.',
+      saveBtn: '동의하고 저장', saveDone: '저장했습니다. 만료일', saveFail: '저장하지 못했습니다. 잠시 뒤 다시 시도해 주세요.', delBtn: '저장된 상담 결과 삭제', delDone: '삭제했습니다. 이전 링크는 더 열리지 않습니다.',
+      history: '상담 이력', histEmpty: '저장된 상담이 없습니다.', histOpen: '열기', histDel: '삭제', histExp: '만료', histSent: '전달', histNoRight: '삭제 권한이 없습니다(manager 이상).',
       stats: '통계', reports: '신고 내역', excl: '제외', staffCode: '호텔 코드', staffB2c: 'B2C ID', staffContract: '계약', mapped: '매핑 정상', unmapped: '매핑 오류',
       score: '점수 근거', rep: '오류 신고', repPrice: '가격', repStock: '재고', repMap: '매핑', repDone: '신고를 기록했습니다.', noReports: '접수된 신고가 없습니다.',
       exLabels: { unmapped: '매핑 오류', soldout: '만실', capacity: '정원 초과', budget: '예산 초과', walk: '도보 초과', breakfast: '조식 없음', radius: '역에서 멂' },
@@ -41,6 +44,9 @@
       linkNone: 'No B2C booking link is connected yet. This is DEMO data and cannot be booked.', retry: 'Retry', err: 'Connection failed. Please try again shortly.',
       foot: 'Prices and availability are as of the lookup and are rechecked before booking. Do not enter personal data. The chat resets after 10 minutes idle.',
       notes: 'Notes', hello: 'Hello, this is OHMY MATE. Tell me the area, dates, guests and budget.',
+      webShare: 'Send to phone (KakaoTalk, LINE...)', mail: 'Send by email', file: 'Save as HTML', tempNote: 'Temporary link, not stored (expires in 24 hours). To store it, give consent below.',
+      saveBtn: 'Agree and save', saveDone: 'Saved. Expires', saveFail: 'Could not save. Please try again.', delBtn: 'Delete saved summary', delDone: 'Deleted. The previous link no longer works.',
+      history: 'History', histEmpty: 'No saved consultations.', histOpen: 'Open', histDel: 'Delete', histExp: 'Expires', histSent: 'Sent', histNoRight: 'No permission to delete (manager or above).',
       stats: 'Stats', reports: 'Reports', excl: 'Excluded', staffCode: 'Hotel code', staffB2c: 'B2C ID', staffContract: 'Contract', mapped: 'Mapped', unmapped: 'Unmapped',
       score: 'Score basis', rep: 'Report', repPrice: 'Price', repStock: 'Stock', repMap: 'Mapping', repDone: 'Report recorded.', noReports: 'No reports yet.',
       exLabels: { unmapped: 'Unmapped', soldout: 'Sold out', capacity: 'Over capacity', budget: 'Over budget', walk: 'Too far to walk', breakfast: 'No breakfast', radius: 'Far from station' },
@@ -142,6 +148,7 @@
       h('button', { type: 'button', onclick: showStats }, t().stats),
       h('button', { type: 'button', onclick: showReports }, t().reports),
     ];
+    if (!window.OMM_STANDALONE) items.splice(3, 0, h('button', { type: 'button', onclick: showHistory }, t().history));
     if (ex) items.push(h('span', { class: 'ex' }, `${t().excl}: ${ex}`));
     bar.replaceChildren(...items);
   }
@@ -277,22 +284,95 @@
     }
   }
 
+  let shareToken = null;
+  function renderQr(url) {
+    $('qr').replaceChildren();
+    if (!url) return;
+    if (window.QRCode) new window.QRCode($('qr'), { text: url, width: 180, height: 180 });
+    else $('qr').textContent = url;
+  }
+  function logEvent(channel) {
+    if (shareToken) api('/api/consult/event', { token: shareToken, channel }).catch(() => {});
+  }
   async function openShare() {
     if (!sessionId) return;
     const { ok, json } = await api('/api/share', { sessionId });
     if (!ok) return;
+    shareToken = null;
+    const sa = !!window.OMM_STANDALONE;
     $('shareUrl').value = json.url;
-    $('qr').replaceChildren();
-    if (window.OMM_STANDALONE) {
+    $('webShareBtn').textContent = t().webShare;
+    $('mailBtn').textContent = t().mail;
+    $('fileBtn').textContent = t().file;
+    $('saveBtn').textContent = t().saveBtn;
+    $('delBtn').textContent = t().delBtn;
+    $('webShareBtn').hidden = sa || !navigator.share;
+    $('mailBtn').hidden = sa;
+    $('fileBtn').hidden = sa;
+    $('saveBox').hidden = sa;
+    $('consentChk').checked = false;
+    $('saveBtn').disabled = true;
+    $('saveBtn').hidden = false;
+    $('delBtn').hidden = true;
+    $('saveMsg').textContent = '';
+    if (sa) {
       $('shareNote').textContent = t().saveNote;
       $('copyBtn').textContent = t().saveHtml;
+      $('qr').replaceChildren();
     } else {
-      $('shareNote').textContent = t().shareNote;
+      $('shareNote').textContent = t().tempNote;
       $('copyBtn').textContent = t().copy;
-      if (window.QRCode) new window.QRCode($('qr'), { text: json.url, width: 180, height: 180 });
-      else $('qr').textContent = json.url;
+      renderQr(json.url);
+      api('/api/consent?lang=' + lang, null, 'GET').then((r) => { if (r.ok) $('consentText').textContent = r.json.text; });
     }
     $('shareDlg').showModal();
+  }
+
+  async function saveConsult() {
+    const { ok, json } = await api('/api/consult/save', { sessionId, consent: $('consentChk').checked === true });
+    if (!ok) {
+      $('saveMsg').textContent = t().saveFail;
+      return;
+    }
+    shareToken = json.token;
+    $('shareUrl').value = json.url;
+    renderQr(json.url);
+    $('saveBtn').hidden = true;
+    $('delBtn').hidden = false;
+    $('shareNote').textContent = t().shareNote;
+    $('saveMsg').textContent = t().saveDone + ' ' + new Date(json.expiresAt).toLocaleDateString(lang === 'ko' ? 'ko-KR' : 'en-US');
+  }
+
+  async function deleteSaved() {
+    const { ok } = await api('/api/consult/delete', { token: shareToken });
+    if (!ok) return;
+    shareToken = null;
+    $('shareUrl').value = '';
+    $('qr').replaceChildren();
+    $('delBtn').hidden = true;
+    $('saveMsg').textContent = t().delDone;
+  }
+
+  async function showHistory() {
+    const { ok, json } = await api('/api/consults', null, 'GET');
+    if (!ok) return bubble('bot', t().badPin);
+    if (!json.consults.length) return bubble('bot', t().histEmpty);
+    const fmt = (ms) => new Date(ms).toLocaleString(lang === 'ko' ? 'ko-KR' : 'en-US', { dateStyle: 'short', timeStyle: 'short' });
+    const rows = json.consults.map((c) => {
+      const tr = h('tr', null,
+        h('td', null, fmt(c.createdAt)),
+        h('td', null, c.summary, h('br'), c.hotels.join(', ')),
+        h('td', null, t().histExp + ' ' + new Date(c.expiresAt).toLocaleDateString() + ' · ' + t().histSent + ' ' + c.deliveries.length),
+        h('td', null,
+          h('button', { type: 'button', onclick: () => window.open(c.url, '_blank', 'noopener') }, t().histOpen), ' ',
+          h('button', { type: 'button', onclick: async () => {
+            const r = await api('/api/consults/delete', { id: c.id });
+            if (r.ok) tr.remove(); else bubble('bot', t().histNoRight);
+          } }, t().histDel)));
+      return tr;
+    });
+    bubble('bot', h('table', { class: 'tbl' }, rows)).style.maxWidth = '100%';
+    scrollEnd();
   }
 
   async function reportIssue(c, kind) {
@@ -374,11 +454,34 @@
     try {
       await navigator.clipboard.writeText($('shareUrl').value);
       $('copyBtn').textContent = t().copied;
+      logEvent('copy');
     } catch (e) {
       $('shareUrl').select();
     }
   });
-  $('printBtn').addEventListener('click', () => window.open($('shareUrl').value, '_blank', 'noopener'));
+  $('printBtn').addEventListener('click', () => { if ($('shareUrl').value) { window.open($('shareUrl').value, '_blank', 'noopener'); logEvent('print'); } });
+  $('consentChk').addEventListener('change', (e) => { $('saveBtn').disabled = !e.target.checked; });
+  $('saveBtn').addEventListener('click', saveConsult);
+  $('delBtn').addEventListener('click', deleteSaved);
+  $('webShareBtn').addEventListener('click', () => {
+    if (navigator.share) navigator.share({ title: 'OHMY MATE', url: $('shareUrl').value }).then(() => logEvent('webshare')).catch(() => {});
+  });
+  $('mailBtn').addEventListener('click', () => {
+    const u = $('shareUrl').value;
+    if (!u) return;
+    window.location.href = 'mailto:?subject=' + encodeURIComponent('OHMY MATE') + '&body=' + encodeURIComponent(u);
+    logEvent('email');
+  });
+  $('fileBtn').addEventListener('click', async () => {
+    const u = $('shareUrl').value;
+    if (!u) return;
+    const blob = await fetch(u).then((r) => r.blob());
+    const a = h('a', { href: URL.createObjectURL(blob), download: 'OHMY-MATE-consultation.html' });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    logEvent('file');
+  });
   $('closeShare').addEventListener('click', () => $('shareDlg').close());
   $('staffBtn').addEventListener('click', () => {
     if (staffView) {
